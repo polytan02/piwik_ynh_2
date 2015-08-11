@@ -1,0 +1,3 @@
+# Analyse des logs nginx pour piwik. Toutes les nuits à 4h.
+
+0 4 * * * www-data /bin/bash "__FINALPATH__/misc/log-analytics/manage_import.sh" > "__FINALPATH__/misc/log-analytics/lastlog_loganalytics_cron.log" 2>&1

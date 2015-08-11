@@ -1,0 +1,39 @@
+#!/bin/bash
+
+domain=$(sudo yunohost app setting piwik domain)
+path=$(sudo yunohost app setting piwik path)
+admin=$(sudo yunohost app setting piwik admin)
+geoip_plugin=$(sudo yunohost app setting piwik geoip_plugin)
+log_analyse=$(sudo yunohost app setting piwik log_analyse)
+
+
+# Suppression de la base de donnée et son user
+mysql -u root -p$(sudo cat /etc/yunohost/mysql) -e "DROP DATABASE piwik ; DROP USER piwik@localhost ;"
+# Suppression du dossier
+sudo rm -rf /var/www/piwik
+# Suppression de la configuration nginx
+sudo rm -f /etc/nginx/conf.d/$domain.d/piwik.conf
+# Suppression de la config php-fpm
+sudo rm -f /etc/php5/fpm/pool.d/piwik.conf
+sudo rm -f /etc/php5/fpm/conf.d/20-piwik.ini
+
+
+if [ "$geoip_plugin" = "Yes" ] || [ "$geoip_plugin" = "yes" ] || [ "$log_analyse" = "YES" ] || [ "$geoip_plugin" = "Y" ] || [ "$geoip_plugin" = "y" ]
+then
+	# Retirer le cron pour geoip
+	sudo rm -f /etc/cron.d/piwik_geoip
+fi
+
+if [ "$log_analyse" = "Yes" ] || [ "$log_analyse" = "yes" ] || [ "$log_analyse" = "YES" ] || [ "$log_analyse" = "Y" ] || [ "$log_analyse" = "y" ]
+then
+	# Retirer le cron pour geoip
+	sudo rm -f /etc/cron.d/piwik_loganalytics
+
+    # Retirer la commande dans le logrotate
+	sudo sed -i "/$path_no_slash\/misc\/log-analytics\/manage_import.sh/d" /etc/logrotate.d/nginx
+fi
+
+# Reload Nginx and php, and regenerate SSOwat conf
+sudo service nginx reload
+sudo yunohost app ssowatconf
+sudo service php5-fpm reload

@@ -1,0 +1,3 @@
+# Mise à jour de la base de donnée GeoIP pour piwik, au 8e jour de chaque mois à 15h.
+
+0 15 8 * * www-data /bin/bash "__FINALPATH__/misc/geoip/maj_geoip.sh" > "__FINALPATH__/misc/log-analytics/lastlog_geoip_cron.log" 2>&1

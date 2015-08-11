@@ -1,0 +1,88 @@
+#!/bin/bash
+
+# Retrieve arguments
+root_pwd=$(sudo cat /etc/yunohost/mysql)
+domain=$(sudo yunohost app setting piwik domain)
+admin=$(sudo yunohost app setting piwik admin)
+path=$(sudo yunohost app setting piwik path)
+geoip_plugin=$(sudo yunohost app setting piwik geoip_plugin)
+db_user=$(sudo yunohost app setting piwik db_user)
+db_pwd=$(sudo yunohost app setting piwik mysqlpwd)
+
+# Change variables in nginx configuration
+final_path=/var/www/piwik
+sudo sed -i "s@PATHTOCHANGE@$path@g" ../conf/nginx.conf
+sudo sed -i "s@ALIASTOCHANGE@$final_path/@g" ../conf/nginx.conf
+sudo sed -i "s@NAMETOCHANGE@piwik@g" ../conf/nginx.conf
+
+# Copy files to right place
+sudo mkdir -p $final_path
+tar -x -f ../sources/piwik.tar.gz
+sudo cp -a piwik/.* $final_path
+sudo cp ../conf/nginx.conf /etc/nginx/conf.d/$domain.d/piwik.conf
+
+# Modify php-fpm pool configuration and copy it to php-fpm pool directory for piwik
+sed -i "s@__NAMETOCHANGE__@piwik@g" ../conf/php-fpm.conf
+sed -i "s@__FINALPATH__@$final_path@g" ../conf/php-fpm.conf
+sed -i "s@__FINALPATH__@$final_path@g" ../conf/php-fpm.ini
+finalphpconf=/etc/php5/fpm/pool.d/piwik.conf
+sudo cp ../conf/php-fpm.conf $finalphpconf
+sudo chown root: $finalphpconf
+finalphpini=/etc/php5/fpm/conf.d/20-piwik.ini
+sudo cp ../conf/php-fpm.ini $finalphpini
+sudo chown root: $finalphpini
+sudo /etc/init.d/php5-fpm reload
+
+# Reload Nginx
+sudo service nginx reload
+
+# Change variables in piwik configuration
+sed -i "s@__DBUSER__@$db_user@g" ../sources/ajouts/config/config.ini.php
+sed -i "s@__DBPWD__@$db_pwd@g" ../sources/ajouts/config/config.ini.php
+salt=$(cat "$final_path/config/config.ini.php" | grep salt | cut -d "\"" -f 2)
+sed -i "s@__SALT__@$salt@g" ../sources/ajouts/config/config.ini.php
+sed -i "s@__DOMAIN__@$domain@g" ../sources/ajouts/config/config.ini.php
+
+sed -i "s@__FINALPATH__@$final_path@g" ../sources/ajouts/misc/geoip/maj_geoip.sh
+sed -i "s@__DOMAIN__@$domain@g" ../sources/ajouts/misc/log-analytics/manage_import.sh
+sed -i "s@__PIWIK_PATH__@$path@g" ../sources/ajouts/misc/log-analytics/manage_import.sh
+sed -i "s@__FINALPATH__@$final_path@g" ../sources/ajouts/misc/log-analytics/manage_import.sh
+sed -i "s@__FINALPATH__@$final_path@g" ../sources/ajouts/misc/log-analytics/extract_log.sh
+
+# Copy supplementary files to right place
+sudo cp -a ../sources/ajouts/* $final_path
+
+
+# Autorisation à l'user mysql piwik d'utiliser LOAD DATA INFILE
+mysql -h localhost -u root -p$(sudo cat /etc/yunohost/mysql) -s piwik -e "GRANT FILE on *.* to piwik@localhost"
+sudo chmod +x -R $final_path/tmp/assets/
+sudo service mysql restart
+
+
+if [ "$geoip_plugin" = "Yes" ] || [ "$geoip_plugin" = "yes" ] || [ "$log_analyse" = "YES" ] || [ "$geoip_plugin" = "Y" ] || [ "$geoip_plugin" = "y" ]
+then
+    # Mise en place d'une tâche cron sur www-data pour maintenir à jour la base de donnée.
+	sed -i "s@__FINALPATH__@$final_path@g" ../conf/cron_piwik_geoip
+	sudo cp ../conf/cron_piwik_geoip /etc/cron.d/piwik_geoip
+fi
+
+
+if [ "$log_analyse" = "Yes" ] || [ "$log_analyse" = "yes" ] || [ "$log_analyse" = "YES" ] || [ "$log_analyse" = "Y" ] || [ "$log_analyse" = "y" ]
+then
+    # Mise en place d'une tâche cron  sur www-data pour l'analyse de log nginx
+	sed -i "s@__FINALPATH__@$final_path@g" ../conf/cron_piwik_loganalytics
+	sudo cp ../conf/cron_piwik_loganalytics /etc/cron.d/piwik_loganalytics
+fi
+
+# Files owned by www-data, for upgrade
+sudo chmod 644 -R $final_path
+# sudo find $final_path -type f -print0 | xargs -0 sudo chmod 644		# Applique les permissions sur les fichiers (rw-r--r--)
+xargs -a ../conf/Liste_exec -I{} sudo chmod 554 "$final_path/{}"	# Maintient les droits d'exec sur les fichiers les nécessitant, pour ne pas empêcher l'exécution des scripts nécessaires (r-xr-xr--)
+sudo find $final_path -type d -print0 | xargs -0 sudo chmod 755 # (rwxr-xr-x)
+sudo chown -R www-data:root $final_path
+
+# Retire l'autorisation d'accès public de piwik
+sudo yunohost app setting piwik skipped_uris -d
+# Garde public l'alias nginx dédié à l'accès du script pour l'analyse de log
+sudo yunohost app setting piwik skipped_uris -v "/local_alias"
+sudo yunohost app ssowatconf

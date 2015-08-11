@@ -1,0 +1,5 @@
+# Première analyse des logs nginx pour piwik.
+# Puis suppression du cron.
+
+*/5 * * * * www-data /bin/bash "__FINALPATH__/misc/log-analytics/manage_import.sh" > "__FINALPATH__/misc/log-analytics/lastlog_loganalytics_cron.log" 2>&1
+*/5 * * * * root rm /etc/cron.d/piwik_loganalytics_first

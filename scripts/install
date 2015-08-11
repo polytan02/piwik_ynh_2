@@ -1,0 +1,197 @@
+#!/bin/bash
+
+# Retrieve arguments
+domain=$1
+path=$2
+admin=$3
+geoip_plugin=$4
+log_analyse=$5
+
+
+# Check if admin exists
+sudo yunohost user list --json | grep -q "\"username\": \"$admin\""
+if [[ ! $? -eq 0 ]]; then
+    echo "Wrong admin"
+    exit 1
+fi
+
+# Check domain/path availability
+sudo yunohost app checkurl $domain$path -a piwik
+if [[ ! $? -eq 0 ]]; then
+    exit 1
+fi
+
+# Add settings to YunoHost
+sudo yunohost app setting piwik admin -v $admin
+sudo yunohost app setting piwik domain -v $domain
+sudo yunohost app setting piwik geoip_plugin -v $geoip_plugin
+sudo yunohost app setting piwik log_analyse -v $log_analyse
+
+
+# Generate random password
+db_pwd=$(dd if=/dev/urandom bs=1 count=200 2> /dev/null | tr -c -d 'A-Za-z0-9' | sed -n 's/\(.\{24\}\).*/\1/p')
+
+# Use 'piwik' as database name and user
+db_user=piwik
+
+# Initialize database and store mysql password for upgrade
+sudo yunohost app initdb $db_user -p $db_pwd
+sudo yunohost app setting piwik db_user -v $db_user
+sudo yunohost app setting piwik mysqlpwd -v $db_pwd
+
+
+# Change variables in nginx configuration
+final_path=/var/www/piwik
+sudo sed -i "s@PATHTOCHANGE@$path@g" ../conf/nginx.conf
+sudo sed -i "s@ALIASTOCHANGE@$final_path/@g" ../conf/nginx.conf
+sudo sed -i "s@NAMETOCHANGE@piwik@g" ../conf/nginx.conf
+
+
+# Copy files to right place
+sudo mkdir -p $final_path
+# Création archive source: tar -czp -f piwik.tar.gz piwik
+# Décompresse la source
+tar -x -f ../sources/piwik.tar.gz
+sudo cp -a piwik/.* $final_path
+sudo cp ../conf/nginx.conf /etc/nginx/conf.d/$domain.d/piwik.conf
+
+# Set right permissions for curl install
+sudo chown -R www-data: $final_path
+
+
+# Modify php-fpm pool configuration and copy it to php-fpm pool directory for piwik
+sed -i "s@__NAMETOCHANGE__@piwik@g" ../conf/php-fpm.conf
+sed -i "s@__FINALPATH__@$final_path@g" ../conf/php-fpm.conf
+sed -i "s@__FINALPATH__@$final_path@g" ../conf/php-fpm.ini
+finalphpconf=/etc/php5/fpm/pool.d/piwik.conf
+sudo cp ../conf/php-fpm.conf $finalphpconf
+sudo chown root: $finalphpconf
+finalphpini=/etc/php5/fpm/conf.d/20-piwik.ini
+sudo cp ../conf/php-fpm.ini $finalphpini
+sudo chown root: $finalphpini
+sudo /etc/init.d/php5-fpm reload
+
+
+# Rend la page d'install publique pour curl
+sudo yunohost app setting piwik skipped_uris -v "/"
+sudo yunohost app ssowatconf
+
+# Reload Nginx
+sudo service nginx reload
+
+# piwik installation via curl
+echo "127.0.0.1 $domain #yunopiwik" | sudo tee -a /etc/hosts
+sleep 1
+
+# Récupération du fuseau horaire du serveur
+timezone=$(cat /etc/timezone)
+
+# Installation par curl
+echo "Appel curl: Installation de la base de données"
+curl -kL -d host="localhost" -d username="$db_user" -d password="$db_pwd" -d dbname="$db_user" -d tables_prefix="piwik_" -d adapter="PDO\\MYSQL" "https://$domain$path/index.php?action=databaseSetup&trackerStatus=500&clientProtocol=https" > /dev/null
+
+echo "Appel curl: Super Utilisateur"
+curl -kL -d login="adminP" -d password="$db_pwd" -d password_bis="$db_pwd" -d email="email@domain.tld" -d subscribe_newsletter_piwikorg="0" -d subscribe_newsletter_piwikpro="0" "https://$domain$path/index.php?action=setupSuperUser&trackerStatus=500&clientProtocol=https&module=Installation" > /dev/null
+
+echo "Appel curl: Paramétrer un site"
+curl -kL -d siteName="$domain" -d url="https://$domain" -d timezone="$timezone" -d ecommerce="0" "https://$domain$path/index.php?action=firstWebsiteSetup&trackerStatus=500&clientProtocol=https&module=Installation" > /dev/null
+
+# Change variables in piwik configuration
+sed -i "s@__DBUSER__@$db_user@g" ../sources/ajouts/config/config.ini.php
+sed -i "s@__DBPWD__@$db_pwd@g" ../sources/ajouts/config/config.ini.php
+salt=$(cat "$final_path/config/config.ini.php" | grep salt | cut -d "\"" -f 2)
+sed -i "s@__SALT__@$salt@g" ../sources/ajouts/config/config.ini.php
+sed -i "s@__DOMAIN__@$domain@g" ../sources/ajouts/config/config.ini.php
+
+sed -i "s@__FINALPATH__@$final_path@g" ../sources/ajouts/misc/geoip/maj_geoip.sh
+sed -i "s@__DOMAIN__@$domain@g" ../sources/ajouts/misc/log-analytics/manage_import.sh
+sed -i "s@__PIWIK_PATH__@$path@g" ../sources/ajouts/misc/log-analytics/manage_import.sh
+sed -i "s@__FINALPATH__@$final_path@g" ../sources/ajouts/misc/log-analytics/manage_import.sh
+sed -i "s@__FINALPATH__@$final_path@g" ../sources/ajouts/misc/log-analytics/extract_log.sh
+
+
+# Copy supplementary files to right place
+sudo cp -a ../sources/ajouts/* $final_path
+
+
+# Ajout de l'administrateur de piwik à partir du plugin ldap.
+# Piwik étant très pointilleux avec l'authentification, on se connecte en header HTTP avec l'user adminP créé à l'installation
+# curl -kL --user adminP:$db_pwd -d username="$admin" "https://$domain$path/index.php?module=LoginLdap&action=loadUser&form=loadUserForm" > /dev/null
+
+# Installation de php5-cli pour l'ajout de l'administrateur via le plugin ldap
+sudo apt-get install php5-cli -qy
+
+# Ajout de l'administrateur via le plugin ldap
+sudo "$final_path/console" loginldap:synchronize-users --login="$admin"
+
+# On accède directement à la base de donnée de piwik pour passer l'utilisateur ajouté en administrateur de piwik. Sans quoi il ne pourra pas se connecter, n'ayant aucun droit!
+mysql -h localhost -u $db_user -p$db_pwd -s $db_user -e "UPDATE piwik.piwik_user SET superuser_access = '1' WHERE piwik_user.login = \"$admin\""
+
+# Suppression de l'user adminP de l'installation, qui n'est plus utile à présent.
+mysql -h localhost -u $db_user -p$db_pwd -s $db_user -e "DELETE FROM piwik.piwik_user WHERE piwik_user.login = 'adminP'"
+
+
+# Autorisation à l'user mysql piwik d'utiliser LOAD DATA INFILE
+mysql -h localhost -u root -p$(sudo cat /etc/yunohost/mysql) -s piwik -e "GRANT FILE on *.* to piwik@localhost"
+sudo chmod +x -R $final_path/tmp/assets/
+sudo service mysql restart
+
+
+if [ "$geoip_plugin" = "Yes" ] || [ "$geoip_plugin" = "yes" ] || [ "$log_analyse" = "YES" ] || [ "$geoip_plugin" = "Y" ] || [ "$geoip_plugin" = "y" ]
+then
+    # Configuration de la géolocalisation par GeoIP PECL
+    # Installation des paquets nécessaires à GeoIP
+    sudo apt-get install php5-geoip php5-dev libgeoip-dev php-pear -qy
+    # Installation de GeoIP par pecl
+    sudo pecl install geoip
+
+    # Récupération de la bdd de GeoIP
+    sudo /bin/bash "$final_path/misc/geoip/maj_geoip.sh"
+
+    # Puis mise en place d'une tâche cron sur www-data pour maintenir à jour la base de donnée.
+	sed -i "s@__FINALPATH__@$final_path@g" ../conf/cron_piwik_geoip
+	sudo cp ../conf/cron_piwik_geoip /etc/cron.d/piwik_geoip
+
+    # Activation de GeoIP PECL dans la base de donnée.
+    mysql -h localhost -u $db_user -p$db_pwd -s $db_user -e "INSERT INTO piwik.piwik_option (option_name, option_value, autoload) VALUES ('usercountry.location_provider', 'geoip_pecl', '0')"
+
+    # Mise en place du php.ini dédié.
+    sudo sed -i "s@;@@g" $finalphpini
+    sudo /etc/init.d/php5-fpm reload
+fi
+
+
+if [ "$log_analyse" = "Yes" ] || [ "$log_analyse" = "yes" ] || [ "$log_analyse" = "YES" ] || [ "$log_analyse" = "Y" ] || [ "$log_analyse" = "y" ]
+then
+    # Mise en place d'une tâche cron  sur www-data pour l'analyse de log nginx
+	sed -i "s@__FINALPATH__@$final_path@g" ../conf/cron_piwik_loganalytics
+	sudo cp ../conf/cron_piwik_loganalytics /etc/cron.d/piwik_loganalytics
+
+    # Analyse des logs nginx juste avant la rotation chaque semaine.
+    sudo sed -i "/prerotate$/ a\\\t\tsu -l www-data -c \"/bin/bash \'$final_path/misc/log-analytics/manage_import.sh\' > \'$final_path/misc/log-analytics/lastlog_loganalytics_cron.log\' 2>&1\"" /etc/logrotate.d/nginx
+    # Ajoute l'appel du script après (=a\) la ligne se terminant (=$) par prerotate et le précède de 2 tabulation (=\\t\t). Le script est exécuté par www-data pour éviter des risques en cas de compromission du script.
+fi
+
+
+# Files owned by www-data, for upgrade
+sudo chmod 644 -R $final_path
+# sudo find $final_path -type f -print0 | xargs -0 sudo chmod 644		# Applique les permissions sur les fichiers (rw-r--r--)
+xargs -a ../conf/Liste_exec -I{} sudo chmod 554 "$final_path/{}"	# Maintient les droits d'exec sur les fichiers les nécessitant, pour ne pas empêcher l'exécution des scripts nécessaires (r-xr-xr--)
+sudo find $final_path -type d -print0 | xargs -0 sudo chmod 755 # (rwxr-xr-x)
+sudo chown -R www-data:root $final_path
+
+# Retire l'autorisation d'accès public de piwik
+sudo yunohost app setting piwik skipped_uris -d
+# Garde public l'alias nginx dédié à l'accès du script pour l'analyse de log
+sudo yunohost app setting piwik skipped_uris -v "/local_alias"
+sudo yunohost app ssowatconf
+
+# Clean hosts
+sudo sed -i '/yunopiwik/d' /etc/hosts
+
+if [ "$log_analyse" = "Yes" ] || [ "$log_analyse" = "yes" ] || [ "$log_analyse" = "YES" ] || [ "$log_analyse" = "Y" ] || [ "$log_analyse" = "y" ]
+then
+    # Programme la première analyse de log
+    sed -i "s@__FINALPATH__@$final_path@g" ../conf/cron_piwik_loganalytics_first
+    sudo cp ../conf/cron_piwik_loganalytics_first /etc/cron.d/piwik_loganalytics_first
+fi

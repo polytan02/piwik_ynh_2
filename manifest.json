@@ -1,0 +1,62 @@
+{
+    "name": "Piwik",
+    "id": "piwik",
+    "description": {
+        "en": "Measurement Software web statistics to analyze traffic to your sites.",
+	"fr": "Logiciel de mesure de statistiques web, pour analyser le trafic de vos sites."
+    },
+	"version": "2.13.1",
+	"url": "http://piwik.org/",
+    "maintainer": {
+        "name": "Maniack Crudelis",
+        "email": "maniackc_dev@crudelis.fr"
+    },
+    "multi_instance": "false",
+    "arguments": {
+        "install" : [
+            {
+                "name": "domain",
+                "ask": {
+                    "en": "Choose a domain for Piwik",
+		    "fr": "Choisissez un domaine pour Piwik"
+                },
+                "example": "domain.org"
+            },
+            {
+                "name": "path",
+                "ask": {
+                    "en": "Choose a path for Piwik",
+		    "fr": "Choisissez un chemin pour Piwik"
+                },
+                "example": "/piwik",
+                "default": "/piwik"
+            },
+	    {
+		"name": "admin",
+		"ask": {
+		    "en": "Choose the Piwik administrator (must be an existing YunoHost user)",
+		    "fr": "Choisissez un administrateur Piwik (doit être un utilisateur YunoHost)"
+		},
+		"example": "john"
+	    },
+	    {
+		"name": "option_geoip",
+		"ask": {
+		    "en": "Activate the plugin geolocation of visitors.",
+		    "fr": "Activer le plugin de géolocalisation des visiteurs."
+		},
+		"choices": ["Yes", "No"],
+		"default": "No"
+	    },
+	    {
+		"name": "option_log",
+		"ask": {
+		    "en": "Enable the analysis of server logs.",
+		    "fr": "Activer l'analyse des log du serveur."
+		},
+		"choices": ["Yes", "No"],
+		"default": "No"
+	    }
+        ]
+    }
+}
