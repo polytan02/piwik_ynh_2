@@ -168,7 +168,7 @@ then
 	sudo cp ../conf/cron_piwik_loganalytics /etc/cron.d/piwik_loganalytics
 
     # Analyse des logs nginx juste avant la rotation chaque semaine.
-    sudo sed -i "/prerotate$/ a\\\t\tsu -l www-data -c \"/bin/bash \'$final_path/misc/log-analytics/manage_import.sh\' > \'$final_path/misc/log-analytics/lastlog_loganalytics_cron.log\' 2>&1\"" /etc/logrotate.d/nginx
+    sudo sed -i "/prerotate$/ a\\\t\tsudo -u www-data /bin/bash \'$final_path/misc/log-analytics/manage_import.sh\' > \'$final_path/misc/log-analytics/lastlog_loganalytics_cron.log\' 2>&1" /etc/logrotate.d/nginx
     # Ajoute l'appel du script après (=a\) la ligne se terminant (=$) par prerotate et le précède de 2 tabulation (=\\t\t). Le script est exécuté par www-data pour éviter des risques en cas de compromission du script.
 fi
 
